@@ -64,6 +64,7 @@ def connect_RoomServer():
 	sockfd_roomserver.connect( (sys.argv[1], int(sys.argv[2])) )
 	print("The_connection_with", sockfd_roomserver.getpeername(), "has_been_established")
 
+
 def do_User():
 	if not inRoom:
 		global username
@@ -82,8 +83,15 @@ def do_List():
 	CmdWin.insert(1.0, "\nPress List")
 	msg = "L::\r\n"
 	# print(msg)
-	sockfd_roomserver.send(msg.encode("ascii"))
-	response = sockfd_roomserver.recv(1024)
+	try:
+		sockfd_roomserver.send(msg.encode("ascii"))
+		response = sockfd_roomserver.recv(1024)
+	except Exception: 
+		# if the connection hasn't been established
+		# try establishing it
+		connect_RoomServer()
+		sockfd_roomserver.send(msg.encode("ascii"))
+		response = sockfd_roomserver.recv(1024)
 	if response.decode("utf-8")[0] != 'G':
 		CmdWin.insert(1.0, "\nError: " + response.decode("utf-8"))
 	else:
@@ -142,9 +150,17 @@ def do_Join():
 			RoomName = userentry.get()
 			msg = "J:{}:{}:{}:{}::\r\n".format(RoomName,username, userIP, str(userPort))
 			userentry.delete(0, END)
-			sockfd_roomserver.send(msg.encode("ascii"))
-			response = sockfd_roomserver.recv(1024)
-			# print(response.decode("utf-8"))
+
+			try:
+				sockfd_roomserver.send(msg.encode("ascii"))
+				response = sockfd_roomserver.recv(1024)
+			except Exception:
+				# if the connection hasn't been established
+				# try establishing it
+				connect_RoomServer()
+				sockfd_roomserver.send(msg.encode("ascii"))
+				response = sockfd_roomserver.recv(1024)	
+
 			CmdWin.insert(1.0, "\n" + response.decode("utf-8"))
 			inRoom = True
 			# create thread with keep_Alive
