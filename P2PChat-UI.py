@@ -274,8 +274,9 @@ class Client:
 		if not client.inRoom:
 			self.gui.CmdWin.insert(1.0, "\n Join a room first")
 		elif topoke == '':
-			for i in client.members:
-				self.gui.CmdWin.insert(1.0, "\n{}".format(i))
+			for user in client.members:
+				if not user == client.username:
+					self.gui.CmdWin.insert(1.0, "\n{}".format(user))
 			self.gui.CmdWin.insert(1.0, "\n To whom do you want to send the poke?")
 		elif (topoke not in client.members) or topoke == client.username:
 			self.gui.CmdWin.insert(1.0, "\nPoke error.")
