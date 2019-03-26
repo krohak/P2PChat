@@ -11,32 +11,8 @@ from tkinter import *
 import sys
 import socket
 import threading
-import time
-
-#
-# Global variables
-#
-
-sockfd_roomserver = ''
-sockfd_chatroom = ''
-username = ''
-myip = ''
-inRoom = False
-RoomName = ''
-prev_hash = ''
-members = {} # List[Member]
-Exit = False
-
-# TODO: get member class ready, add ip and host to it along with username.
-# parse the response string and add to member list
-# TODO: Make 1 chatroom server socket and 1 chatroom client socket
-
-class Member:
-	def __init__(self, name, ip, port):
-		self._name = name
-		self._ip = ip
-		self._port = port
-
+# import socket.timeout as TimeoutException
+from time import sleep
 
 #
 # This is the hash function for generating a unique
@@ -55,149 +31,219 @@ def sdbm_hash(instr):
 
 
 #
+# Global variables
+#
+client = None
+
+# TODO: get member class ready, add ip and host to it along with username.
+# parse the response string and add to member list
+
+
+
+class Member:
+	def __init__(self, name, ip, port):
+		self._name = name
+		self._ip = ip
+		self._port = port
+
+class Client:
+	username = ''
+	inRoom = False
+	roomName = ''
+	prev_hash = ''
+	members = {}
+	sockfd_roomserver = None
+	sockud = None
+	Exit = False
+
+	def __init__(self, port):
+		self._port = port
+	
+	def getInfo(self):
+		ip, _ = self.sockfd_roomserver.getsockname()
+		return ip, self._port
+
+	def update_members(self, values):
+		i = 2
+		self.members.clear()
+		print(values)
+		while i+2 < len(values):
+			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]))
+			i += 3
+
+	def roomserver_listener(self):
+		while True:
+			response = self.sockfd_roomserver.recv(1024).decode("utf-8")
+			show = True
+			if response[0] == "G":
+				pass
+			elif response[0] == "M":
+				values = response.split(':')
+				if values[1] != self.prev_hash:
+					self.prev_hash = values[1]
+					self.update_members(values)
+				else:
+					show = False
+			if show:
+				print(response)
+				CmdWin.insert(1.0, "\n" + response)
+
+	def udp_listener(self):
+		while True:
+			response, addr = self.sockud.recvfrom(1024)
+			response = response.decode("utf-8")
+			print("received at udp", response)
+			if response[0] == 'K':
+				msg = "A::\r\n"
+				self.sockud.sendto(msg.encode("ascii"), (addr[0], addr[1]))
+				msg = "{} just poked you".format(response.split(':')[2])
+				print(msg)
+				CmdWin.insert(1.0, "\n" + msg)
+
+	def create_udp(self):
+		self.sockud = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		self.sockud.bind(('', self._port))
+		updthd = threading.Thread(target=self.udp_listener, daemon=True)
+		updthd.start()
+
+	def connect_to_RoomServer(self):
+		self.sockfd_roomserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.sockfd_roomserver.connect(( sys.argv[1], int(sys.argv[2])))
+
+	def thread_RoomServer(self):
+		self.connect_to_RoomServer()
+
+		roomserver_thd = threading.Thread(target = self.roomserver_listener, daemon=True)
+		roomserver_thd.start()
+		print('sockname', self.sockfd_roomserver.getsockname())
+		print("The_connection_with", self.sockfd_roomserver.getpeername(),"has_been_established")
+
+	def send_tcp(self, msg):
+		if self.sockfd_roomserver:
+			self.sockfd_roomserver.send(msg.encode("ascii"))
+
+	def close_connection(self):
+		self.sockfd_roomserver.close()
+
+
+
+
+#
 # Functions to handle user input
 #
 
-def connect_RoomServer():
-	global sockfd_roomserver
-	sockfd_roomserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	sockfd_roomserver.connect( (sys.argv[1], int(sys.argv[2])) )
-	print("The_connection_with", sockfd_roomserver.getpeername(), "has_been_established")
-
+def do_Quit():
+	global client
+	# client.Exit = True
+	client.close_connection()
+	CmdWin.insert(1.0, "\nPress Quit")
+	sys.exit(0)
 
 def do_User():
-	if not inRoom:
-		global username
-		outstr = "\n[User] username: "+userentry.get()
-		username = userentry.get()
-		print('username: ', username)
-		if not username:
-			outstr = "\nInvalid Username: Empty Username"
-		CmdWin.insert(1.0, outstr)
-		userentry.delete(0, END)
+	global client
+	username = userentry.get()
+	outstr = ''
+	if client.inRoom:
+		outstr = "\nAlready in room. Cant change your username."
+	elif not username:
+		outstr = "\nInvalid Username: Empty Username"
 	else:
-		CmdWin.insert(1.0, "\nAlready in room ")
-		userentry.delete(0, END)
+		client.username = username
+		outstr = "\n[User] username: {}".format(username)
+	CmdWin.insert(1.0, outstr)
+	userentry.delete(0, END)
 
 def do_List():
+	global client
 	CmdWin.insert(1.0, "\nPress List")
 	msg = "L::\r\n"
-	# print(msg)
 	try:
-		sockfd_roomserver.send(msg.encode("ascii"))
-		response = sockfd_roomserver.recv(1024)
+		client.send_tcp(msg)
 	except Exception: 
 		# if the connection hasn't been established
 		# try establishing it
-		connect_RoomServer()
-		sockfd_roomserver.send(msg.encode("ascii"))
-		response = sockfd_roomserver.recv(1024)
-	if response.decode("utf-8")[0] != 'G':
-		CmdWin.insert(1.0, "\nError: " + response.decode("utf-8"))
-	else:
-		# sockfd_roomserver.send(msg.encode("ascii"))
-		# response = sockfd_roomserver.recv(1024)
-		CmdWin.insert(1.0, "\n" + response.decode("utf-8"))
+		client.connect_to_RoomServer()
+		client.send_tcp(msg)
 
-def update_members(values):
-	global members
-	i = 2
-	members.clear()
-	print(values)
-	while i+2 < len(values):
-		members[values[i]] = Member(values[i], values[i+1], values[i+2])
-		i += 3
-
-
-def keep_Alive():
-	global prev_hash
-	global RoomName
-	global username
-	global Exit
-	
-	while not Exit:
-		print('sleeping')
-		time.sleep(20)
-		if Exit: 
-			break
-		print('awake')
-		userIP, userPort = sockfd_roomserver.getsockname()
-		msg = "J:{}:{}:{}:{}::\r\n".format(RoomName, username, userIP, str(userPort))
-		sockfd_roomserver.send(msg.encode("ascii"))
-		response = sockfd_roomserver.recv(1024)
-		response = response.decode("utf-8")
-		print(response)
-		if response[0] == "M":
-			values = response.split(':')
-			if values[1] != prev_hash:
-				prev_hash = values[1]
-				update_members(values)
+def join_and_keep_Alive():
+	global client
+	while True:
+		userIP, userPort = client.getInfo()
+		msg = "J:{}:{}:{}:{}::\r\n".format(client.roomName, client.username, userIP, str(userPort))
+		try:
+			client.send_tcp(msg)
+		except Exception:
+			# if the connection hasn't been established
+			# try establishing it
+			client.connect_to_RoomServer()
+			client.send_tcp(msg)
+		sleep(20)
 
 def do_Join():
-	global inRoom
-	global username
-	global RoomName
-
-	if not inRoom:
-		RoomName = userentry.get()
-		if username == '':
-			CmdWin.insert(1.0, "\nEnter Username")
-		elif RoomName == '':
-			CmdWin.insert(1.0, "\nEnter Room name")
-		else:
-			CmdWin.insert(1.0, "\nPress JOIN")
-			userIP, userPort = sockfd_roomserver.getsockname()
-			RoomName = userentry.get()
-			msg = "J:{}:{}:{}:{}::\r\n".format(RoomName,username, userIP, str(userPort))
-			userentry.delete(0, END)
-
-			try:
-				sockfd_roomserver.send(msg.encode("ascii"))
-				response = sockfd_roomserver.recv(1024)
-			except Exception:
-				# if the connection hasn't been established
-				# try establishing it
-				connect_RoomServer()
-				sockfd_roomserver.send(msg.encode("ascii"))
-				response = sockfd_roomserver.recv(1024)	
-
-			CmdWin.insert(1.0, "\n" + response.decode("utf-8"))
-			inRoom = True
-			# create thread with keep_Alive
-			thd_joinroom = threading.Thread(target=keep_Alive, daemon=True) 
-			# start new thread
-			thd_joinroom.start()
-
+	global client
+	CmdWin.insert(1.0, "\nPress JOIN")
+	roomname = userentry.get()
+	userentry.delete(0, END)
+	if client.inRoom:
+		CmdWin.insert(1.0, "\nAlready in a room.")
+	elif client.username == '':
+		CmdWin.insert(1.0, "\nEnter Username.")
+	elif roomname == '':
+		CmdWin.insert(1.0, "\nEnter Room name.")
 	else:
-		CmdWin.insert(1.0, "\nError: Room already joined")		
-
+		client.roomName = roomname
+		client.inRoom = True
+		keepalive_thd = threading.Thread(target = join_and_keep_Alive, daemon=True)
+		keepalive_thd.start()
 
 
 def do_Send():
 	CmdWin.insert(1.0, "\nPress Send")
 
 def do_Poke():
-    # CmdWin.insert(1.0, "\nPress Poke")
-    topoke = userentry.get()
-    if not inRoom:
-        CmdWin.insert(1.0, "\n Join a room first")
-    elif topoke == '':
-        for i in members:
-            CmdWin.insert(1.0, "\n{}".format(i))
-    elif (topoke not in members) or topoke == username:
-       CmdWin.insert(1.0, "\n Poke error.")
-    else:
-        pass
+	global client
+	CmdWin.insert(1.0, "\nPress Poke")
+	topoke = userentry.get()
+	if not client.inRoom:
+		CmdWin.insert(1.0, "\n Join a room first")
+	elif topoke == '':
+		for i in client.members:
+			CmdWin.insert(1.0, "\n{}".format(i))
+		CmdWin.insert(1.0, "\n To whom do you want to send the poke?")
+	elif (topoke not in client.members) or topoke == client.username:
+		CmdWin.insert(1.0, "\nPoke error.")
+	else:
+		poker(topoke)
+		userentry.delete(0, END)
+
+def poker(topoke):
+	global client
+	msg = "K:{}:{}::\r\n".format(client.roomName, client.username)
+	topoke_ip = client.members[topoke]._ip
+	topoke_port = client.members[topoke]._port
+	print(topoke_ip, topoke_port)
+	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	sock.sendto(msg.encode("ascii"), (topoke_ip, topoke_port))
+	sock.settimeout(2)
+	try:
+		message, address = sock.recvfrom(1024)
+		CmdWin.insert(1.0, "\nPoked and got ACK.")
+	except socket.timeout:
+		print("Timeout!!! Try again...")
+		CmdWin.insert(1.0, "\nDid not receive ACK flag.")
+	sock.close()
 
 
+def main():
+	global client
+	if len(sys.argv) != 4:
+		print("P2PChat.py <server address> <server port no.> <my port no.>")
+		sys.exit(2)
 
-
-def do_Quit():
-	global Exit
-	CmdWin.insert(1.0, "\nPress Quit")
-	Exit = True
-	sys.exit(0)
-	
+	client = Client(int(sys.argv[3]))
+	client.thread_RoomServer()
+	client.create_udp()
+	win.mainloop()
 
 #
 # Set up of Basic UI
@@ -247,24 +293,7 @@ bottscroll.pack(side=RIGHT, fill=Y, expand=True)
 CmdWin.config(yscrollcommand=bottscroll.set)
 bottscroll.config(command=CmdWin.yview)
 
-def main():
-	if len(sys.argv) != 4:
-		print("P2PChat.py <server address> <server port no.> <my port no.>")
-		sys.exit(2)
 
-	global sockfd_roomserver
-	global sockfd_chatroom
-	
-	connect_RoomServer()
-
-	sockfd_chatroom = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	sockfd_chatroom.bind(('', int(sys.argv[3])))
-	print('Chatroom sockname', sockfd_chatroom.getsockname())
-	# print('hostname', sockfd_chatroom.gethostname())
-
-	# sockfd.recvfrom(1024) #UDP recv
-
-	win.mainloop()
 
 if __name__ == "__main__":
 	main()
