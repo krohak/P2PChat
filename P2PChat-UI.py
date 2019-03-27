@@ -233,6 +233,8 @@ class Client:
 
 						elif rmsg[0] == "T":
 							print("T", rmsg)
+							msg_text = rmsg.split(':')[6]
+							self.msg_queue.put(msg_text)
 							print("Got a message!!")
 							if len(self.Wlist) > 1:
 								print("Relay it to others.")
@@ -481,7 +483,7 @@ class Client:
 		sock.sendto(msg.encode("ascii"), (topoke_ip, topoke_port))
 		sock.settimeout(2)
 		try:
-			message, address = sock.recvfrom(1024)
+			_, _ = sock.recvfrom(1024)
 			self.gui.CmdWin.insert(1.0, "\nPoked and got ACK.")
 		except socket.timeout:
 			print("Timeout!!! Try again...")
