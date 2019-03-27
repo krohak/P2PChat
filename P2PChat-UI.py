@@ -166,9 +166,6 @@ class Client:
 		# add the listening socket to the READ socket list
 		self.Rlist.append(self.sockfd_backwardlink)
 
-		# create an empty WRITE socket list
-		# Wlist = []
-
 		while True:
 			# use select to wait for any incoming connection requests or
 			# incoming messages or 10 seconds
@@ -182,62 +179,62 @@ class Client:
 				sys.exit(1)
 
 		
-		# if has incoming activities
-		if Rready:
-			for sd in Rready:
-				if sd == self.sockfd_backwardlink:
-					try:
-						newfd, caddr = self.sockfd_backwardlink.accept()
-						print("A new client has arrived. It is at:", caddr)
-					
-					# handle error
-					except socket.error as emsg:
-					  print("Socket accept error: ", emsg)
-					  continue
-					try:
-						rmsg = newfd.recv(1024).decode("utf-8")                 
-					except socket.error as emsg:
-					    print("Socket recv error: ", emsg)
-					    continue
+			# if has incoming activities
+			if Rready:
+				for sd in Rready:
+					if sd == self.sockfd_backwardlink:
+						try:
+							newfd, caddr = self.sockfd_backwardlink.accept()
+							print("A new client has arrived. It is at:", caddr)
+						
+						# handle error
+						except socket.error as emsg:
+							print("Socket accept error: ", emsg)
+							continue
+						try:
+							rmsg = newfd.recv(1024).decode("utf-8")                 
+						except socket.error as emsg:
+							print("Socket recv error: ", emsg)
+							continue
 
-					if rmsg == b'':
-					    print("Connection is broken")
-					    continue
+						if rmsg == b'':
+							print("Connection is broken")
+							continue
 
-					# p2p handshake 
-					if rmsg[0] == "P":
-						print("P", rmsg)
-						msg = "S:{}::\r\n".format(2)
-						newfd.send(msg.encode('ascii'))
+						# p2p handshake 
+						if rmsg[0] == "P":
+							print("P", rmsg)
+							msg = "S:{}::\r\n".format(2)
+							newfd.send(msg.encode('ascii'))
+						
+						else:
+							print("here", rmsg)
+
+						self.Rlist.append(newfd)
+						self.Wlist.append(newfd)
+
+					# elif sd == self.sockfd_forwardlink:
+					#     # do something
+					#     pass
 					
 					else:
-						print("here", rsmg)
-
-					self.Rlist.append(newfd)
-					self.Wlist.append(newfd)
-
-                # elif sd == self.sockfd_forwardlink:
-                #     # do something
-                #     pass
-				
-				else:
-					rmsg = sd.recv(1024).decode("utf-8")
-					# regular text message
-					if rmsg[0] == "T":
-						print("T", rmsg)
-						print("Got a message!!")
-						if len(self.Wlist) > 1:
-							print("Relay it to others.")
-							# relay it to everyone except the sender
-							for p in self.Wlist:
-								if p != sd:
-									p.send(rmsg)
-					else:
-						print("A client connection is broken!!")
-						self.Wlist.remove(sd)
-						self.Rlist.remove(sd)
-		else:
-			print("Idling")	
+						rmsg = sd.recv(1024).decode("utf-8")
+						# regular text message
+						if rmsg[0] == "T":
+							print("T", rmsg)
+							print("Got a message!!")
+							if len(self.Wlist) > 1:
+								print("Relay it to others.")
+								# relay it to everyone except the sender
+								for p in self.Wlist:
+									if p != sd:
+										p.send(rmsg)
+						else:
+							print("A client connection is broken!!")
+							self.Wlist.remove(sd)
+							self.Rlist.remove(sd)
+			else:
+				print("Idling")	
 
 	def connect_Forwardlink(self):
 		my_ip, my_port = self.getInfo()
