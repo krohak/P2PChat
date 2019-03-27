@@ -129,6 +129,7 @@ class Client:
 	Backlist_hash = []
 	Fowlink = False
 	P2P_listening = False
+	HID = None
 
 	def __init__(self, port, tkroot):
 		self._port = port
@@ -197,21 +198,28 @@ class Client:
 							print("Socket recv error: ", emsg)
 							continue
 
-						if rmsg == b'':
+						if not rmsg:
 							print("Connection is broken")
 							continue
 
 						# p2p handshake 
-						if rmsg[0] == "P":
+						elif rmsg[0] == "P":
 							print("P", rmsg)
 							msg = "S:{}::\r\n".format(2)
 							newfd.send(msg.encode('ascii'))
+
+							values = rmsg.split(':')
+							# mark node as backward link
+							hashval = sdbm_hash(str(values[2])+str(values[3])+str(values[4]))
+							self.Backlist_hash.append(hashval)
+							
+							# add the new client connection to READ socket list
+							# add the new client connection to WRITE socket list							
+							self.Rlist.append(newfd)
+							self.Wlist.append(newfd)
 						
 						else:
 							print("here", rmsg)
-
-						self.Rlist.append(newfd)
-						self.Wlist.append(newfd)
 
 					# elif sd == self.sockfd_forwardlink:
 					#     # do something
@@ -220,7 +228,10 @@ class Client:
 					else:
 						rmsg = sd.recv(1024).decode("utf-8")
 						# regular text message
-						if rmsg[0] == "T":
+						if not rmsg:
+							print("Connection is broken")
+
+						elif rmsg[0] == "T":
 							print("T", rmsg)
 							print("Got a message!!")
 							if len(self.Wlist) > 1:
@@ -228,17 +239,17 @@ class Client:
 								# relay it to everyone except the sender
 								for p in self.Wlist:
 									if p != sd:
-										p.send(rmsg)
+										p.send(rmsg.encode('ascii'))
 						else:
 							print("A client connection is broken!!")
 							self.Wlist.remove(sd)
 							self.Rlist.remove(sd)
 			else:
-				print("Idling")	
+				print("Idling", self.username)	
 
 	def connect_Forwardlink(self):
 		my_ip, my_port = self.getInfo()
-		my_hashval = sdbm_hash(str(self.username) + str(my_ip) + str(my_port))
+		my_hashval = self.HID
 
 		members_dict = OrderedDict(self.members)
 		members_dict = OrderedDict(sorted(members_dict.items(), key=lambda x: x[1]._hashval))
@@ -271,6 +282,7 @@ class Client:
 				# recv response
 				response = self.sockfd_forwardlink.recv(100).decode("utf-8") 
 				if response[0] == "S":
+					print(response)
 					self.Fowlink = True
 					self.Rlist.append(self.sockfd_forwardlink)
 					self.Wlist.append(self.sockfd_forwardlink)
@@ -378,6 +390,8 @@ class Client:
 			outstr = "\n[User] username: {}".format(username)
 		self.gui.CmdWin.insert(1.0, outstr)
 		self.gui.userentry.delete(0, END)
+		my_ip, my_port = self.getInfo()
+		self.HID = sdbm_hash(str(self.username) + str(my_ip) + str(my_port))
 
 	def do_List(self):
 		global client
@@ -424,6 +438,21 @@ class Client:
 
 	def do_Send(self):
 		self.gui.CmdWin.insert(1.0, "\nPress Send")
+		msg_text = self.gui.userentry.get()
+		self.gui.userentry.delete(0, END)
+		msg = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
+			self.roomName, self.HID, self.username, 3, len(msg_text), msg_text)
+
+		try:
+			self.sockfd_forwardlink.send(msg.encode('ascii'))
+		except Exception as e:
+			print("{} unable to send msg to forwardlinks: {}".format(self.username, e))
+		try:
+			for p in self.Wlist:
+				# if p != sd:
+				p.send(msg.encode('ascii'))
+		except Exception as e:
+			print("{} unable to send msg to backwardlinks: {}".format(self.username, e))		
 
 	def do_Poke(self):
 		global client
