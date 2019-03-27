@@ -118,9 +118,15 @@ class Client:
 	prev_hash = ''
 	members = {}
 	sockfd_roomserver = None
+	sockfd_forwardlink = None
+	sockfd_backwardlink = None
 	sockud = None
 	Exit = False
 	msg_queue = Queue.Queue()
+	Rlist = []
+	Backlist_hash = []
+	Fowlink = False
+	Fowlink_hash = None
 
 	def __init__(self, port, tkroot):
 		self._port = port
@@ -137,18 +143,55 @@ class Client:
 		self.gui.processIncoming()
 		self.tkroot.after(200, self.periodic_msg_display)
 
-	def connect_to_Member(self):
-		members = OrderedDict(self.members)
-		# for member_name, member in members.items():
-		# 	print(member_name, member._hashval)
-		members_sorted = OrderedDict(sorted(members.items(), key=lambda x: x[1]._hashval))
-		# print(foo)
-		for member_name, member in members_sorted.items():
-			print(member_name, member._hashval)
-		print(members_sorted['rohak']._hashval)
-		x= list(members_sorted.keys()).index('rohak')
-		print(x)
-		print(list(members_sorted.items())[x])
+	def check_Backlink(self, member_hash):
+		# do something
+		if member_hash in self.Backlist_hash:
+			return True
+		return False
+
+	def connect_Forwardlink(self):
+		my_ip, my_port = self.getInfo()
+		my_hashval = sdbm_hash(str(self.username) + str(my_ip) + str(my_port))
+
+		members_dict = OrderedDict(self.members)
+		members_dict = OrderedDict(sorted(members_dict.items(), key=lambda x: x[1]._hashval))
+		members_list = list(members_dict.items())
+		memlist_size = len(members_list)
+		x = [members_list[i][1]._hashval for i in range(memlist_size)].index(my_hashval)
+		start = (x+1) % memlist_size
+		
+		while start != x:
+			#if there is an existing TCP connection between the member at gList[start] and H
+			#(i.e., a “backward link”)
+			candidate = members_list[start][1]
+			if self.check_Backlink(candidate._hashval):
+				start = (start+1) % memlist_size
+			else:
+				try:
+					# establish a TCP connection to the member at gList[start] 
+					self.sockfd_forwardlink = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+					self.sockfd_forwardlink.connect(( candidate._ip, candidate._port ))
+				except Exception as e:
+					print("Exception", e)
+					start = (start+1) % memlist_size
+					continue
+
+				# p2p handshake
+				msg = "P:{}:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, my_ip
+							,my_port, 1 )
+				# send message
+				self.sockfd_forwardlink.send(msg.encode('ascii'))
+				# recv response
+				response = self.sockfd_forwardlink.recv(100)
+				if response:
+					self.Fowlink = True
+					self.Rlist.append(self.sockfd_forwardlink)
+					self.Fowlink_hash = candidate._hashval
+					break
+				else:
+					start = (start+1) % memlist_size
+					continue
+
 
 	def update_members(self, values):
 		i = 2
@@ -158,7 +201,11 @@ class Client:
 			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
 			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
 			i += 3
-		self.connect_to_Member()
+		# periodically try connecting to forward link
+		if not self.Fowlink:
+			fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
+			fowlink_thd.start()
+			# self.connect_Forwardlink()
 
 	def roomserver_listener(self):
 		while True:
@@ -194,8 +241,8 @@ class Client:
 	def create_udp(self):
 		self.sockud = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		self.sockud.bind(('', self._port))
-		updthd = threading.Thread(target=self.udp_listener, daemon=True)
-		updthd.start()
+		udpthd = threading.Thread(target=self.udp_listener, daemon=True)
+		udpthd.start()
 
 	def connect_to_RoomServer(self):
 		self.sockfd_roomserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
