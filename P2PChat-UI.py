@@ -15,6 +15,7 @@ import threading
 from time import sleep
 import queue as Queue
 from collections import OrderedDict
+import select
 
 #
 # This is the hash function for generating a unique
@@ -124,9 +125,10 @@ class Client:
 	Exit = False
 	msg_queue = Queue.Queue()
 	Rlist = []
+	Wlist = []
 	Backlist_hash = []
 	Fowlink = False
-	Fowlink_hash = None
+	P2P_listening = False
 
 	def __init__(self, port, tkroot):
 		self._port = port
@@ -148,6 +150,94 @@ class Client:
 		if member_hash in self.Backlist_hash:
 			return True
 		return False
+	
+	def P2P_listener(self):
+		# open backlink socket
+		self.sockfd_backwardlink = socket.socket()
+		try:
+			self.sockfd_backwardlink.bind(('', self._port))
+		except socket.error as emsg:
+			print("Socket bind error: ", emsg)
+			return 
+
+		self.sockfd_backwardlink.listen(5)
+		self.P2P_listening = True
+
+		# add the listening socket to the READ socket list
+		self.Rlist.append(self.sockfd_backwardlink)
+
+		# create an empty WRITE socket list
+		# Wlist = []
+
+		while True:
+			# use select to wait for any incoming connection requests or
+			# incoming messages or 10 seconds
+			try:
+				Rready, Wready, Eready = select.select(self.Rlist, [], [], 10)
+			except select.error as emsg:
+				print("At select, caught an exception:", emsg)
+				sys.exit(1)
+			except KeyboardInterrupt:
+				print("At select, caught the KeyboardInterrupt")
+				sys.exit(1)
+
+		
+		# if has incoming activities
+		if Rready:
+			for sd in Rready:
+				if sd == self.sockfd_backwardlink:
+					try:
+						newfd, caddr = self.sockfd_backwardlink.accept()
+						print("A new client has arrived. It is at:", caddr)
+					
+					# handle error
+					except socket.error as emsg:
+					  print("Socket accept error: ", emsg)
+					  continue
+					try:
+						rmsg = newfd.recv(1024).decode("utf-8")                 
+					except socket.error as emsg:
+					    print("Socket recv error: ", emsg)
+					    continue
+
+					if rmsg == b'':
+					    print("Connection is broken")
+					    continue
+
+					# p2p handshake 
+					if rmsg[0] == "P":
+						print("P", rmsg)
+						msg = "S:{}::\r\n".format(2)
+						newfd.send(msg.encode('ascii'))
+					
+					else:
+						print("here", rsmg)
+
+					self.Rlist.append(newfd)
+					self.Wlist.append(newfd)
+
+                # elif sd == self.sockfd_forwardlink:
+                #     # do something
+                #     pass
+				
+				else:
+					rmsg = sd.recv(1024).decode("utf-8")
+					# regular text message
+					if rmsg[0] == "T":
+						print("T", rmsg)
+						print("Got a message!!")
+						if len(self.Wlist) > 1:
+							print("Relay it to others.")
+							# relay it to everyone except the sender
+							for p in self.Wlist:
+								if p != sd:
+									p.send(rmsg)
+					else:
+						print("A client connection is broken!!")
+						self.Wlist.remove(sd)
+						self.Rlist.remove(sd)
+		else:
+			print("Idling")	
 
 	def connect_Forwardlink(self):
 		my_ip, my_port = self.getInfo()
@@ -182,11 +272,11 @@ class Client:
 				# send message
 				self.sockfd_forwardlink.send(msg.encode('ascii'))
 				# recv response
-				response = self.sockfd_forwardlink.recv(100)
-				if response:
+				response = self.sockfd_forwardlink.recv(100).decode("utf-8") 
+				if response[0] == "S":
 					self.Fowlink = True
 					self.Rlist.append(self.sockfd_forwardlink)
-					self.Fowlink_hash = candidate._hashval
+					self.Wlist.append(self.sockfd_forwardlink)
 					break
 				else:
 					start = (start+1) % memlist_size
@@ -201,11 +291,18 @@ class Client:
 			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
 			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
 			i += 3
+
 		# periodically try connecting to forward link
 		if not self.Fowlink:
+			print("fowlink")
 			fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
 			fowlink_thd.start()
 			# self.connect_Forwardlink()
+		
+		if not self.P2P_listening:
+			print("p2plistening")
+			p2p_thd = threading.Thread(target = self.P2P_listener, daemon=True)
+			p2p_thd.start()
 
 	def roomserver_listener(self):
 		while True:
