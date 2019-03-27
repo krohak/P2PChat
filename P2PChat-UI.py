@@ -14,6 +14,7 @@ import threading
 # import socket.timeout as TimeoutException
 from time import sleep
 import queue as Queue
+from collections import OrderedDict
 
 #
 # This is the hash function for generating a unique
@@ -41,10 +42,11 @@ client = None
 
 
 class Member:
-	def __init__(self, name, ip, port):
+	def __init__(self, name, ip, port, hashval):
 		self._name = name
 		self._ip = ip
 		self._port = port
+		self._hashval = hashval
 
 #
 # Set up of Basic UI
@@ -135,13 +137,28 @@ class Client:
 		self.gui.processIncoming()
 		self.tkroot.after(200, self.periodic_msg_display)
 
+	def connect_to_Member(self):
+		members = OrderedDict(self.members)
+		# for member_name, member in members.items():
+		# 	print(member_name, member._hashval)
+		members_sorted = OrderedDict(sorted(members.items(), key=lambda x: x[1]._hashval))
+		# print(foo)
+		for member_name, member in members_sorted.items():
+			print(member_name, member._hashval)
+		print(members_sorted['rohak']._hashval)
+		x= list(members_sorted.keys()).index('rohak')
+		print(x)
+		print(list(members_sorted.items())[x])
+
 	def update_members(self, values):
 		i = 2
 		self.members.clear()
 		print(values)
 		while i+2 < len(values):
-			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]))
+			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
+			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
 			i += 3
+		self.connect_to_Member()
 
 	def roomserver_listener(self):
 		while True:
