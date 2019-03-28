@@ -36,7 +36,7 @@ def sdbm_hash(instr):
 #
 # Global variables
 #
-client = None
+# client = None
 
 # TODO: get member class ready, add ip and host to it along with username.
 # parse the response string and add to member list
@@ -108,7 +108,7 @@ class GUI:
 			try:
 				msg = self.queue.get(0)
 				# print(msg)
-				self.CmdWin.insert(1.0, "\n" + msg)
+				self.CmdWin.insert(1.0, msg)
 			except Queue.Empty:
 				pass
 
@@ -134,10 +134,17 @@ class Client:
 
 	def __init__(self, port, tkroot):
 		self._port = port
-		self.gui = GUI(tkroot, self.msg_queue, self.do_User, self.do_List, self.do_Join, 
-		self.do_Send, self.do_Poke, self.do_Quit)
 		self.tkroot = tkroot
+
+		self.open_backlink()
+
+		self.gui = GUI(self.tkroot, self.msg_queue, self.do_User, self.do_List, self.do_Join, 
+		self.do_Send, self.do_Poke, self.do_Quit)
 		self.periodic_msg_display()
+
+		self.thread_RoomServer()
+		self.create_udp()
+
 	
 	def getInfo(self):
 		ip, _ = self.sockfd_roomserver.getsockname()
@@ -156,13 +163,6 @@ class Client:
 	def P2P_listener(self):
 		# open backlink socket
 		print("p2plistening")
-		self.sockfd_backwardlink = socket.socket()
-		try:
-			self.sockfd_backwardlink.bind(('', self._port))
-		except socket.error as emsg:
-			print("Socket bind error, exiting p2p listener: ", emsg)
-			self.sockfd_backwardlink = None
-			return 
 
 		self.sockfd_backwardlink.listen(5)
 		self.P2P_listening = True
@@ -230,7 +230,11 @@ class Client:
 					#     pass
 					
 					else:
-						rmsg = sd.recv(1024).decode("utf-8")
+						try:
+							rmsg = sd.recv(1024).decode("utf-8")
+						except Exception as emsg:
+							print("Socket recv error: ", emsg)
+							continue
 						# regular text message
 						if not rmsg:
 							print("Connection is broken at sd")
@@ -248,7 +252,10 @@ class Client:
 								# relay it to everyone except the sender
 								for p in self.Wlist:
 									if p != sd:
-										p.send(rmsg.encode('ascii'))
+										try:
+											p.send(rmsg.encode('ascii'))
+										except Exception as e:
+											print("Socket send error", e)
 						else:
 							print("A client connection is broken!!")
 							self.Wlist.remove(sd)
@@ -348,6 +355,8 @@ class Client:
 				if values[1] != self.prev_hash:
 					self.prev_hash = values[1]
 					self.update_members(values)
+				# IF YOU WANT THE BELOW FUNCTIONS TO CALL MORE 
+				# OFTEN, MOVE TO A NEW THREAD WHICH RUNS > 20s
 				# periodically try connecting to forward link
 				self.thread_ForwardLink()
 				# this happens once
@@ -366,6 +375,13 @@ class Client:
 				print(msg)
 				self.msg_queue.put(msg)
 
+	def open_backlink(self):
+		self.sockfd_backwardlink = socket.socket()
+		try:
+			self.sockfd_backwardlink.bind(('', self._port))
+		except socket.error as emsg:
+			print("Socket bind error, exiting: ", emsg)
+			sys.exit(0)
 
 	def create_udp(self):
 		self.sockud = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -400,24 +416,24 @@ class Client:
 		
 		if self.sockfd_backwardlink:
 			for connnection in self.Wlist:
-				connnection.close()
+				try:
+					connnection.close()
+				except Exception as e:
+						print("Error closing connection: ", e)
+						sys.exit(0)
 			self.sockfd_backwardlink.close()
-		
-		# except Exception as e:
-		# 	print("Error closing conncetion: ", e)
-		# 	sys.exit(0)
 
 	# Functions to handle user input
 	def do_User(self):
-		global client
+		# global client
 		username = self.gui.userentry.get()
 		outstr = ''
-		if client.inRoom:
+		if self.inRoom:
 			outstr = "\nAlready in room. Cant change your username."
 		elif not username:
 			outstr = "\nInvalid Username: Empty Username"
 		else:
-			client.username = username
+			self.username = username
 			outstr = "\n[User] username: {}".format(username)
 		self.gui.CmdWin.insert(1.0, outstr)
 		self.gui.userentry.delete(0, END)
@@ -425,50 +441,50 @@ class Client:
 		self.HID = sdbm_hash(str(self.username) + str(my_ip) + str(my_port))
 
 	def do_List(self):
-		global client
-		self.gui.CmdWin.insert(1.0, "\nPress List")
+		# global client
+		# self.gui.CmdWin.insert(1.0, "\nPress List")
 		msg = "L::\r\n"
 		try:
-			client.send_tcp(msg)
+			self.send_tcp(msg)
 		except Exception: 
 			# if the connection hasn't been established
 			# try establishing it
-			client.connect_to_RoomServer()
-			client.send_tcp(msg)
+			self.connect_to_RoomServer()
+			self.send_tcp(msg)
 
 	def join_and_keep_Alive(self):
-		global client
+		# global client
 		while True:
-			userIP, userPort = client.getInfo()
-			msg = "J:{}:{}:{}:{}::\r\n".format(client.roomName, client.username, userIP, str(userPort))
+			userIP, userPort = self.getInfo()
+			msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
 			try:
-				client.send_tcp(msg)
+				self.send_tcp(msg)
 			except Exception:
 				# if the connection hasn't been established
 				# try establishing it
-				client.connect_to_RoomServer()
-				client.send_tcp(msg)
+				self.connect_to_RoomServer()
+				self.send_tcp(msg)
 			sleep(20)
 
 	def do_Join(self):
-		global client
-		self.gui.CmdWin.insert(1.0, "\nPress JOIN")
+		# global client
+		# self.gui.CmdWin.insert(1.0, "\nPress JOIN")
 		roomname = self.gui.userentry.get()
 		self.gui.userentry.delete(0, END)
-		if client.inRoom:
+		if self.inRoom:
 			self.gui.CmdWin.insert(1.0, "\nAlready in a room.")
-		elif client.username == '':
+		elif self.username == '':
 			self.gui.CmdWin.insert(1.0, "\nEnter Username.")
 		elif roomname == '':
 			self.gui.CmdWin.insert(1.0, "\nEnter Room name.")
 		else:
-			client.roomName = roomname
-			client.inRoom = True
+			self.roomName = roomname
+			self.inRoom = True
 			keepalive_thd = threading.Thread(target = self.join_and_keep_Alive, daemon=True)
 			keepalive_thd.start()
 
 	def do_Send(self):
-		self.gui.CmdWin.insert(1.0, "\nPress Send")
+		# self.gui.CmdWin.insert(1.0, "\nPress Send")
 		msg_text = self.gui.userentry.get()
 		self.gui.userentry.delete(0, END)
 		msg_display = "\n[{}] {}".format(self.username, msg_text)
@@ -496,35 +512,35 @@ class Client:
 			self.thread_BackwardLink()		
 	
 	def do_Quit(self):
-		global client
+		# global client
 		# client.Exit = True
 		self.gui.CmdWin.insert(1.0, "\nPress Quit")
-		client.close_connection()
+		self.close_connection()
 		sys.exit(0)
 
 
 	def do_Poke(self):
-		global client
+		# global client
 		self.gui.CmdWin.insert(1.0, "\nPress Poke")
 		topoke = self.gui.userentry.get()
-		if not client.inRoom:
+		if not self.inRoom:
 			self.gui.CmdWin.insert(1.0, "\n Join a room first")
 		elif topoke == '':
-			for user in client.members:
-				if not user == client.username:
+			for user in self.members:
+				if not user == self.username:
 					self.gui.CmdWin.insert(1.0, "\n{}".format(user))
 			self.gui.CmdWin.insert(1.0, "\n To whom do you want to send the poke?")
-		elif (topoke not in client.members) or topoke == client.username:
+		elif (topoke not in self.members) or topoke == self.username:
 			self.gui.CmdWin.insert(1.0, "\nPoke error.")
 		else:
 			self.poker(topoke)
 			self.gui.userentry.delete(0, END)
 
 	def poker(self, topoke):
-		global client
-		msg = "K:{}:{}::\r\n".format(client.roomName, client.username)
-		topoke_ip = client.members[topoke]._ip
-		topoke_port = client.members[topoke]._port
+		# global client
+		msg = "K:{}:{}::\r\n".format(self.roomName, self.username)
+		topoke_ip = self.members[topoke]._ip
+		topoke_port = self.members[topoke]._port
 		print(topoke_ip, topoke_port)
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		sock.sendto(msg.encode("ascii"), (topoke_ip, topoke_port))
@@ -539,7 +555,7 @@ class Client:
 
 
 def main():
-	global client
+	# global client
 	if len(sys.argv) != 4:
 		print("P2PChat.py <server address> <server port no.> <my port no.>")
 		sys.exit(2)
@@ -547,9 +563,8 @@ def main():
 	win = Tk()
 	win.title("MyP2PChat")
 	
-	client = Client(int(sys.argv[3]), win)
-	client.thread_RoomServer()
-	client.create_udp()
+	# client = 
+	Client(int(sys.argv[3]), win)
 
 	win.mainloop()
 
