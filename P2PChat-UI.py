@@ -175,7 +175,7 @@ class Client:
 			# use select to wait for any incoming connection requests or
 			# incoming messages or 10 seconds
 			try:
-				Rready, Wready, Eready = select.select(self.Rlist, [], [], 10)
+				Rready, _, _ = select.select(self.Rlist, [], [], 10)
 			except select.error as emsg:
 				print("At select, caught an exception:", emsg)
 				sys.exit(1)
@@ -209,18 +209,21 @@ class Client:
 						# p2p handshake 
 						elif rmsg[0] == "P":
 							print("P", rmsg)
-							msg = "S:{}::\r\n".format(2)
-							newfd.send(msg.encode('ascii'))
-
 							values = rmsg.split(':')
-							# mark node as backward link
 							hashval = sdbm_hash(str(values[2])+str(values[3])+str(values[4]))
-							self.Backlist_hash.append(hashval)
 							
-							# add the new client connection to READ socket list
-							# add the new client connection to WRITE socket list							
-							self.Rlist.append(newfd)
-							self.Wlist.append(newfd)
+							if self.quick_verify(hashval):
+								print("verified {} {} {}".format(values[2], values[3], values[4]))
+								msg = "S:{}::\r\n".format(2)
+								newfd.send(msg.encode('ascii'))
+
+								# mark node as backward link
+								self.Backlist_hash.append(hashval)
+								
+								# add the new client connection to READ socket list
+								# add the new client connection to WRITE socket list							
+								self.Rlist.append(newfd)
+								self.Wlist.append(newfd)
 						
 						else:
 							print("here", rmsg)
@@ -319,6 +322,33 @@ class Client:
 					continue
 
 		self.Fowlink_inprogress = False
+	
+	# To verify whether this unknown peer is in the most updated member list
+	def quick_verify(self, hash_verify):
+		# send join info
+		userIP, userPort = self.getInfo()
+		msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
+		try:
+			self.sockfd_roomserver.send(msg.encode("ascii"))
+		except Exception as e:
+			print("unable to quick verify:", e)
+			return False
+
+		# recieve member info
+		response = self.sockfd_roomserver.recv(1024).decode("utf-8")
+		if response[0] == "M":
+			values = response.split(':')
+			# calculate hash for each member
+			i = 2
+			while i+2 < len(values):
+				hash_str = sdbm_hash(str(values[i])+str(values[i+1])+str(values[i+2]))
+				if hash_str == hash_verify:
+
+					return True
+				i += 3
+
+		return False
+
 
 	def update_members(self, values):
 		i = 2
