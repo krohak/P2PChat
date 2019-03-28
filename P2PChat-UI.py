@@ -128,6 +128,7 @@ class Client:
 	Wlist = []
 	Backlist_hash = []
 	Fowlink = False
+	Fowlink_inprogress = False
 	P2P_listening = False
 	HID = None
 
@@ -158,7 +159,8 @@ class Client:
 		try:
 			self.sockfd_backwardlink.bind(('', self._port))
 		except socket.error as emsg:
-			print("Socket bind error: ", emsg)
+			print("Socket bind error, exiting p2p listener: ", emsg)
+			self.sockfd_backwardlink = None
 			return 
 
 		self.sockfd_backwardlink.listen(5)
@@ -167,6 +169,7 @@ class Client:
 		# add the listening socket to the READ socket list
 		self.Rlist.append(self.sockfd_backwardlink)
 
+		# try:
 		while True:
 			# use select to wait for any incoming connection requests or
 			# incoming messages or 10 seconds
@@ -230,11 +233,14 @@ class Client:
 						# regular text message
 						if not rmsg:
 							print("Connection is broken")
+							self.Wlist.remove(sd)
+							self.Rlist.remove(sd)
 
 						elif rmsg[0] == "T":
 							print("T", rmsg)
-							msg_text = rmsg.split(':')[6]
-							self.msg_queue.put(msg_text)
+							msg_text = rmsg.split(':')
+							msg_display = "[{}] {}".format(msg_text[3], msg_text[6])
+							self.msg_queue.put(msg_display)
 							print("Got a message!!")
 							if len(self.Wlist) > 1:
 								print("Relay it to others.")
@@ -248,8 +254,15 @@ class Client:
 							self.Rlist.remove(sd)
 			else:
 				print("Idling", self.username)	
+	
+		# except Exception as e:
+		# 	print("exiting p2p listener: ",e)
+		# 	self.P2P_listening = False
+		# 	return 
 
 	def connect_Forwardlink(self):
+		self.Fowlink_inprogress = True
+
 		my_ip, my_port = self.getInfo()
 		my_hashval = self.HID
 
@@ -293,6 +306,7 @@ class Client:
 					start = (start+1) % memlist_size
 					continue
 
+		self.Fowlink_inprogress = False
 
 	def update_members(self, values):
 		i = 2
@@ -303,13 +317,14 @@ class Client:
 			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
 			i += 3
 
-		# periodically try connecting to forward link
-		if not self.Fowlink:
+	def thread_ForwardLink(self):
+		# if not already forwardlinked and not already trying to establish a forwardlink
+		if not self.Fowlink and not self.Fowlink_inprogress:
 			print("fowlink")
 			fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
 			fowlink_thd.start()
-			# self.connect_Forwardlink()
-		
+	
+	def thread_BackwardLink(self):
 		if not self.P2P_listening:
 			print("p2plistening")
 			p2p_thd = threading.Thread(target = self.P2P_listener, daemon=True)
@@ -326,6 +341,10 @@ class Client:
 				if values[1] != self.prev_hash:
 					self.prev_hash = values[1]
 					self.update_members(values)
+					# periodically try connecting to forward link
+					self.thread_ForwardLink()
+					# this happens once
+					self.thread_BackwardLink()
 				else:
 					show = False
 			if show:
@@ -369,16 +388,24 @@ class Client:
 			self.sockfd_roomserver.send(msg.encode("ascii"))
 
 	def close_connection(self):
-		self.sockfd_roomserver.close()
+		# try:
+		
+		if self.sockfd_roomserver:
+			self.sockfd_roomserver.close()
+		
+		if self.Fowlink:
+			self.sockfd_forwardlink.close()
+		
+		if self.sockfd_backwardlink:
+			for connnection in self.Wlist:
+				connnection.close()
+			self.sockfd_backwardlink.close()
+		
+		# except Exception as e:
+		# 	print("Error closing conncetion: ", e)
+		# 	sys.exit(0)
 
 	# Functions to handle user input
-	def do_Quit(self):
-		global client
-		# client.Exit = True
-		client.close_connection()
-		self.gui.CmdWin.insert(1.0, "\nPress Quit")
-		sys.exit(0)
-
 	def do_User(self):
 		global client
 		username = self.gui.userentry.get()
@@ -445,16 +472,31 @@ class Client:
 		msg = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
 			self.roomName, self.HID, self.username, 3, len(msg_text), msg_text)
 
+		# try sending message to forwardlink
 		try:
 			self.sockfd_forwardlink.send(msg.encode('ascii'))
+		# set up forward link if broken / not established
 		except Exception as e:
 			print("{} unable to send msg to forwardlinks: {}".format(self.username, e))
+			self.Fowlink = False
+			self.thread_ForwardLink()
+
+		# try sending to all backlinks
 		try:
 			for p in self.Wlist:
 				# if p != sd:
 				p.send(msg.encode('ascii'))
 		except Exception as e:
-			print("{} unable to send msg to backwardlinks: {}".format(self.username, e))		
+			print("{} unable to send msg to backwardlinks: {}".format(self.username, e))
+			self.thread_BackwardLink()		
+	
+	def do_Quit(self):
+		global client
+		# client.Exit = True
+		self.gui.CmdWin.insert(1.0, "\nPress Quit")
+		client.close_connection()
+		sys.exit(0)
+
 
 	def do_Poke(self):
 		global client
