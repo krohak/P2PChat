@@ -1,4 +1,3 @@
-
 #!/usr/bin/python3
 
 # Student name and No.: Yashvardhan Nevatia, 3035238797
@@ -7,12 +6,6 @@
 # Python version: 3.6.1
 # Version: 1
 
-
-"""
-All of the sockets in the readable list have incoming data buffered and available to be read.
-All of the sockets in the writable list have free space in their buffer and can be written to.
-
-"""
 
 from tkinter import *
 import sys
@@ -60,8 +53,8 @@ class Member:
 # Set up of Basic UI
 #
 class GUI:
-	def __init__(self, win, _queue, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
-		self.queue = _queue
+	def __init__(self, win, queue, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
+		self.queue = queue
 		self.create_frames(win, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit)
 
 	def create_frames(self, win, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
@@ -115,7 +108,7 @@ class GUI:
 			try:
 				msg = self.queue.get(0)
 				# print(msg)
-				self.MsgWin.insert(1.0, msg)
+				self.CmdWin.insert(1.0, msg)
 			except Queue.Empty:
 				pass
 
@@ -126,26 +119,18 @@ class Client:
 	prev_hash = ''
 	members = {}
 	sockfd_roomserver = None
+	sockfd_forwardlink = None
+	sockfd_backwardlink = None
 	sockud = None
 	Exit = False
 	msg_queue = Queue.Queue()
-
-	# new variables
 	Rlist = []
 	Wlist = []
-	backlist_hash = []
+	Backlist_hash = []
 	Fowlink = False
 	Fowlink_inprogress = False
 	P2P_listening = False
 	HID = None
-	sockfd_forwardlink = None
-	sockfd_backwardlink = None
-
-	# Yashvardhan
-	prev_msgid = 0
-	msg_history = {}
-	msg_counter = 0
-	forward_link_hash = ''
 
 	def __init__(self, port, tkroot):
 		self._port = port
@@ -153,74 +138,35 @@ class Client:
 
 		self.open_backlink()
 
-		self.gui = GUI(self.tkroot, self.msg_queue, self.do_User, self.do_List, self.do_Join,
+		self.gui = GUI(self.tkroot, self.msg_queue, self.do_User, self.do_List, self.do_Join, 
 		self.do_Send, self.do_Poke, self.do_Quit)
 		self.periodic_msg_display()
 
 		self.thread_RoomServer()
 		self.create_udp()
 
-	""" get info of client """
+	
 	def getInfo(self):
 		ip, _ = self.sockfd_roomserver.getsockname()
 		return ip, self._port
-
+	
 	def periodic_msg_display(self):
 		self.gui.processIncoming()
 		self.tkroot.after(200, self.periodic_msg_display)
 
-	# NEW FUNCTIONS
-
-	def getRready(self):
-		try:
-			Rready, _, _ = select.select(self.Rlist, [], [], 10)
-			return Rready
-		except select.error as emsg:
-			print("At select, caught an exception:", emsg)
-			sys.exit(1)
-		except KeyboardInterrupt:
-			print("At select, caught the KeyboardInterrupt")
-			sys.exit(1)
-
-	def establish_backlink(self, rmsg, newfd):
-		values = rmsg.split(':')
-		hashval = sdbm_hash(str(values[2])+str(values[3])+str(values[4]))
-
-		if self.quick_verify(hashval) and self.forward_link_hash != hashval:
-			# print("verified backlink connection with {} {} {}".format(values[2], values[3], values[4]))
-			msg = "S:{}::\r\n".format(self.prev_msgid)
-			newfd.send(msg.encode('ascii'))
-			outstr = "\nEstablished backlink with {}".format(values[2])
-			self.msg_queue.put(outstr)
-			# mark node as backward link
-			# print("appending this to backlist_hash", hashval)
-			self.backlist_hash.append(hashval)
-
-			# add the new client connection to READ socket list
-			# add the new client connection to WRITE socket list
-			self.Rlist.append(newfd)
-			self.Wlist.append(newfd)
-		else:
-			print("cancelling this backlink request with {} {} {}".format(values[2], values[3], values[4]))
-
-	def get_content(self, msg_text):
-		msg_content = msg_text[6]
-		i = 7
-		while i < len(msg_text):
-			if msg_text[i] != '' and msg_text[i] != '\r\n':
-				print("appending this to content", msg_text[i])
-				msg_content += ':'
-				msg_content += msg_text[i]
-			i += 1
-		return msg_content
-
+	def check_Backlink(self, member_hash):
+		# do something
+		if member_hash in self.Backlist_hash:
+			return True
+		return False
+	
 	def P2P_listener(self):
 		# open backlink socket
 		print("p2plistening")
 
-		""" start listening on the binded socket """
 		self.sockfd_backwardlink.listen(5)
 		self.P2P_listening = True
+
 		# add the listening socket to the READ socket list
 		self.Rlist.append(self.sockfd_backwardlink)
 
@@ -228,120 +174,130 @@ class Client:
 		while True:
 			# use select to wait for any incoming connection requests or
 			# incoming messages or 10 seconds
-			Rready = self.getRready()
-			if not Rready:
-				# print("Idling", self.username)
-				continue
+			try:
+				Rready, _, _ = select.select(self.Rlist, [], [], 10)
+			except select.error as emsg:
+				print("At select, caught an exception:", emsg)
+				sys.exit(1)
+			except KeyboardInterrupt:
+				print("At select, caught the KeyboardInterrupt")
+				sys.exit(1)
+
+		
 			# if has incoming activities
-			for sd in Rready:
-				if sd == self.sockfd_backwardlink:
-					try:
-						newfd, caddr = self.sockfd_backwardlink.accept()
-						# print("A new client is trying to establish backlink. It is at:", caddr)
-					except socket.error as emsg:
-						print("Socket accept error: ", emsg)
-						continue
-
-					try:
-						rmsg = newfd.recv(1024).decode("utf-8")
-					except socket.error as emsg:
-						print("Socket recv error: ", emsg)
-						continue
-
-					if not rmsg:
-						print("Connection is broken at sockfd_backwardlink")
-						continue
-					elif rmsg[0] == "P":
-						# print("received message for backlink connection", rmsg)
-						self.establish_backlink(rmsg, newfd)
-					else:
-						print("random message", rmsg)
-
-				else:
-					try:
-						rmsg = sd.recv(1024).decode("utf-8")
-					except Exception as emsg:
-						print("Socket recv error: ", emsg)
-						continue
-					# regular text message
-					if not rmsg:
-						print("Connection is broken at sd")
-						self.Wlist.remove(sd)
-						self.Rlist.remove(sd)
-					elif rmsg[0] == "T":
-						print("received text message", rmsg)
-						msg_text = rmsg.split(':')
-						print("msg text split with length", msg_text, len(msg_text))
-						msg_room = msg_text[1]
-						msg_origin_hid = msg_text[2]
-						msg_origin_username = msg_text[3]
-						msg_id = msg_text[4]
-						msg_length = msg_text[5]
-						msg_content = self.get_content(msg_text)
-						print("this is the recieved content", msg_content)
-
-						if self.roomName != msg_room:
-							print("message received from some other room.")
+			if Rready:
+				for sd in Rready:
+					if sd == self.sockfd_backwardlink:
+						try:
+							newfd, caddr = self.sockfd_backwardlink.accept()
+							print("A new client has arrived. It is at:", caddr)
+						
+						# handle error
+						except socket.error as emsg:
+							print("Socket accept error: ", emsg)
 							continue
-						elif not self.quick_verify(msg_origin_hid):
-							print("message received from stranger")
+						try:
+							rmsg = newfd.recv(1024).decode("utf-8")                 
+						except socket.error as emsg:
+							print("Socket recv error: ", emsg)
 							continue
+
+						if not rmsg:
+							print("Connection is broken at sockfd_backwardlink")
+							continue
+
+						# p2p handshake 
+						elif rmsg[0] == "P":
+							print("P", rmsg)
+							values = rmsg.split(':')
+							hashval = sdbm_hash(str(values[2])+str(values[3])+str(values[4]))
+							
+							if self.quick_verify(hashval):
+								print("verified {} {} {}".format(values[2], values[3], values[4]))
+								msg = "S:{}::\r\n".format(2)
+								newfd.send(msg.encode('ascii'))
+
+								# mark node as backward link
+								self.Backlist_hash.append(hashval)
+								
+								# add the new client connection to READ socket list
+								# add the new client connection to WRITE socket list							
+								self.Rlist.append(newfd)
+								self.Wlist.append(newfd)
+						
 						else:
-							if msg_origin_hid in self.msg_history:
-								if msg_id in self.msg_history[msg_origin_hid]:
-									print("message already received.")
-									continue
-								else:
-									self.msg_history[msg_origin_hid][msg_id] = 1
-							else:
-								self.msg_history[msg_origin_hid] = {msg_id : 1}
+							print("here", rmsg)
 
-						self.prev_msgid = msg_id
-
-						msg_display = "\n[{}] {}".format(msg_origin_username, msg_content)
-						print("putting this in message queue 1", msg_display)
-						self.msg_queue.put(msg_display)
-
-						if len(self.Wlist) > 1:
-							print("Relay it to others.")
-							# relay it to everyone except the original sender and the client that relayed the message
-							for p in self.Wlist:
-								# add check that p hash val does not equal to msg_origin_hid
-								if p != sd:
-									try:
-										p.send(rmsg.encode('ascii'))
-									except Exception as e:
-										print("Socket send error", e)
+					# elif sd == self.sockfd_forwardlink:
+					#     # do something
+					#     pass
+					
 					else:
-						print("A client connection is broken!!")
-						self.Wlist.remove(sd)
-						self.Rlist.remove(sd)
+						try:
+							rmsg = sd.recv(1024).decode("utf-8")
+						except Exception as emsg:
+							print("Socket recv error: ", emsg)
+							continue
+						# regular text message
+						if not rmsg:
+							print("Connection is broken at sd")
+							self.Wlist.remove(sd)
+							self.Rlist.remove(sd)
+
+						elif rmsg[0] == "T":
+							print("T", rmsg)
+							msg_text = rmsg.split(':')
+							msg_display = "\n[{}] {}".format(msg_text[3], msg_text[6])
+							self.msg_queue.put(msg_display)
+							print("Got a message!!")
+							if len(self.Wlist) > 1:
+								print("Relay it to others.")
+								# relay it to everyone except the sender
+								for p in self.Wlist:
+									if p != sd:
+										try:
+											p.send(rmsg.encode('ascii'))
+										except Exception as e:
+											print("Socket send error", e)
+						else:
+							print("A client connection is broken!!")
+							self.Wlist.remove(sd)
+							self.Rlist.remove(sd)
+			else:
+				print("Idling", self.username)	
+	
+		# except Exception as e:
+		# 	print("exiting p2p listener: ",e)
+		# 	self.P2P_listening = False
+		# 	return 
 
 	def connect_Forwardlink(self):
-		# print("entered in connect_Forwardlink")
+		print("fowlink")
 		self.Fowlink_inprogress = True
+
 		my_ip, my_port = self.getInfo()
 		my_hashval = self.HID
 
-		members_list = list(self.members.items())
-		members_list.sort(key = lambda x: x[1]._hashval)
+		members_dict = OrderedDict(self.members)
+		members_dict = OrderedDict(sorted(members_dict.items(), key=lambda x: x[1]._hashval))
+		members_list = list(members_dict.items())
 		memlist_size = len(members_list)
 		x = [members_list[i][1]._hashval for i in range(memlist_size)].index(my_hashval)
 		start = (x+1) % memlist_size
-
+		
 		while start != x:
 			#if there is an existing TCP connection between the member at gList[start] and H
 			#(i.e., a “backward link”)
 			candidate = members_list[start][1]
-			# print("checking candidate", candidate, "hash value of candidate", candidate._hashval)
-			if candidate._hashval in self.backlist_hash:
+			print("candidate chosen is: {}".format(candidate._name))
+			if self.check_Backlink(candidate._hashval):
 				start = (start+1) % memlist_size
 			else:
 				try:
-					# print("candidate chosen for forward link is: {}".format(candidate._name))
-					# establish a TCP connection to the member at gList[start]
+					# establish a TCP connection to the member at gList[start] 
 					self.sockfd_forwardlink = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 					self.sockfd_forwardlink.connect(( candidate._ip, candidate._port ))
+					
 				except Exception as e:
 					print("Exception", e)
 					start = (start+1) % memlist_size
@@ -349,44 +305,26 @@ class Client:
 
 				# p2p handshake
 				msg = "P:{}:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, my_ip
-							,my_port, self.prev_msgid )
-				# print("sending message to establish forward link", msg)
+							,my_port, 1 )
+				# send message
 				self.sockfd_forwardlink.send(msg.encode('ascii'))
 				# recv response
-				# TODO: check if thread stops
-				try:
-					response = self.sockfd_forwardlink.recv(100).decode("utf-8")
-					if response[0] == "S":
-						# print("received response for confirmation of forward link", response)
-						# print("{} established forwardlink with {}".format(self.username, candidate._name))
-						outstr = "\nEstablished forwardlink with {}".format(candidate._name)
-						self.msg_queue.put(outstr)
-						self.Fowlink = True
-						self.Rlist.append(self.sockfd_forwardlink)
-						self.Wlist.append(self.sockfd_forwardlink)
-						self.forward_link_hash = candidate._hashval
-						# print("forward link hash value set to;", candidate._hashval)
-						break
-				except Exception as e:
-					print("Exception", e)
+				response = self.sockfd_forwardlink.recv(100).decode("utf-8") 
+				if response[0] == "S":
+					print(response)
+					print("{} established forwardlink with {}".format(self.username, candidate._name))
+					self.Fowlink = True
+					self.Rlist.append(self.sockfd_forwardlink)
+					self.Wlist.append(self.sockfd_forwardlink)
+					break
+				else:
 					start = (start+1) % memlist_size
 					continue
 
 		self.Fowlink_inprogress = False
-
-	def thread_ForwardLink(self):
-		# if not already forwardlinked and not already trying to establish a forwardlink
-		while True:
-			if not self.Fowlink and not self.Fowlink_inprogress:
-				fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
-				fowlink_thd.start()
-			sleep(5)
-
+	
+	# To verify whether this unknown peer is in the most updated member list
 	def quick_verify(self, hash_verify):
-		# To verify whether this unknown peer is in the most updated member list
-		for member in self.members:
-			if str(self.members[member]._hashval) == str(hash_verify):
-				return True
 		# send join info
 		userIP, userPort = self.getInfo()
 		msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
@@ -397,118 +335,123 @@ class Client:
 			return False
 
 		# recieve member info
-		# TODO: check if recv blocks thread.
 		response = self.sockfd_roomserver.recv(1024).decode("utf-8")
 		if response[0] == "M":
 			values = response.split(':')
+			# calculate hash for each member
 			i = 2
 			while i+2 < len(values):
 				hash_str = sdbm_hash(str(values[i])+str(values[i+1])+str(values[i+2]))
-				if str(hash_str) == str(hash_verify):
+				if hash_str == hash_verify:
+
 					return True
 				i += 3
 
 		return False
 
-	def thread_BackwardLink(self):
-		if not self.P2P_listening:
-			p2p_thd = threading.Thread(target = self.P2P_listener, daemon=True)
-			p2p_thd.start()
 
 	def update_members(self, values):
 		i = 2
 		self.members.clear()
 		print("{} recieved new member list".format(self.username))
-		flag = False
 		while i+2 < len(values):
 			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
-			hash_val = sdbm_hash(hash_str)
-			# print("checking hash string for forward link", hash_val, self.forward_link_hash)
-			if hash_val == self.forward_link_hash:
-				flag = True
-			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), hash_val)
-			# print(values[i], values[i+1], int(values[i+2]), hash_val)
+			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
+			print(values[i], values[i+1], int(values[i+2]), sdbm_hash(hash_str))
 			i += 3
-		if self.Fowlink and not flag:
-			outstr = "\nOld forward link broken. Will try again."
-			self.msg_queue.put(outstr)
-			self.Fowlink= False
-		elif not self.Fowlink:
-			print("reasong for starting thread; fowlink", self.Fowlink, "flag", flag)
-			print("starting forward link thread. this statement should only print once.")
-			fowlink_thd = threading.Thread(target = self.thread_ForwardLink, daemon=True)
-			fowlink_thd.start()
 
-	""" called once in init -> start listening as server """
+	def thread_ForwardLink(self):
+		# if not already forwardlinked and not already trying to establish a forwardlink
+		if not self.Fowlink and not self.Fowlink_inprogress:
+			fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
+			fowlink_thd.start()
+	
+	def thread_BackwardLink(self):
+		if not self.P2P_listening:
+			p2p_thd = threading.Thread(target = self.P2P_listener, daemon=True)
+			p2p_thd.start()
+
+	def roomserver_listener(self):
+		while True:
+			response = self.sockfd_roomserver.recv(1024).decode("utf-8")
+			
+			# response from list
+			if response[0] == "G":
+				self.msg_queue.put("\n{}".format(response))
+
+			# response from join 
+			elif response[0] == "M":
+				values = response.split(':')
+				if values[1] != self.prev_hash:
+					self.prev_hash = values[1]
+					self.update_members(values)
+				# IF YOU WANT THE BELOW FUNCTIONS TO CALL MORE 
+				# OFTEN, MOVE TO A NEW THREAD WHICH RUNS > 20s
+				# periodically try connecting to forward link
+				self.thread_ForwardLink()
+				# this happens once
+				self.thread_BackwardLink()
+
+
+	def udp_listener(self):
+		while True:
+			response, addr = self.sockud.recvfrom(1024)
+			response = response.decode("utf-8")
+			print("received at udp", response)
+			if response[0] == 'K':
+				msg = "A::\r\n"
+				self.sockud.sendto(msg.encode("ascii"), (addr[0], addr[1]))
+				msg = "\n{} just poked you".format(response.split(':')[2])
+				print(msg)
+				self.msg_queue.put(msg)
+
 	def open_backlink(self):
-		self.sockfd_backwardlink = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.sockfd_backwardlink = socket.socket()
 		try:
 			self.sockfd_backwardlink.bind(('', self._port))
 		except socket.error as emsg:
 			print("Socket bind error, exiting: ", emsg)
 			sys.exit(0)
 
-	# NEW FUNCTIONS
+	def create_udp(self):
+		self.sockud = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		self.sockud.bind(('', self._port))
+		udpthd = threading.Thread(target=self.udp_listener, daemon=True)
+		udpthd.start()
 
-	""" listening to the roomserver """
-	def roomserver_listener(self):
-		while True:
-			response = self.sockfd_roomserver.recv(1024).decode("utf-8")
-
-			# response from list
-			if response[0] == "G":
-				print("putting this on queue 2", response)
-				self.msg_queue.put("\n{}".format(response))
-
-			# response from join
-			elif response[0] == "M":
-				# print("member list received from server")
-				values = response.split(':')
-				if values[1] != self.prev_hash:
-					self.prev_hash = values[1]
-					self.update_members(values)
-
-				# IF YOU WANT THE BELOW FUNCTIONS TO CALL MORE
-				# OFTEN, MOVE TO A NEW THREAD WHICH RUNS < 20s
-				# periodically try connecting to forward link
-				self.thread_BackwardLink()
-
-				# this happens once
-				# self.thread_ForwardLink()
-
-	""" establish initial connection with room server"""
 	def connect_to_RoomServer(self):
 		self.sockfd_roomserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.sockfd_roomserver.connect(( sys.argv[1], int(sys.argv[2])))
 
-	""" establish connection and start listening to room server """
 	def thread_RoomServer(self):
 		self.connect_to_RoomServer()
+
 		roomserver_thd = threading.Thread(target = self.roomserver_listener, daemon=True)
 		roomserver_thd.start()
 		print('sockname', self.sockfd_roomserver.getsockname())
 		print("The_connection_with roomserver at", self.sockfd_roomserver.getpeername(),"has_been_established")
 
-	""" send tcp message to room server"""
 	def send_tcp(self, msg):
 		if self.sockfd_roomserver:
 			self.sockfd_roomserver.send(msg.encode("ascii"))
 
-	""" send join request to room server every 20 seconds"""
-	def join_and_keep_Alive(self):
-		# global client
-		while True:
-			userIP, userPort = self.getInfo()
-			msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
-			try:
-				self.send_tcp(msg)
-			except Exception:
-				# if the connection hasn't been established
-				# try establishing it
-				self.connect_to_RoomServer()
-				self.send_tcp(msg)
-			sleep(20)
-
+	def close_connection(self):
+		# try:
+		
+		if self.sockfd_roomserver:
+			self.sockfd_roomserver.close()
+		
+		if self.Fowlink:
+			self.sockfd_forwardlink.close()
+		
+		if self.sockfd_backwardlink:
+			for connnection in self.Wlist:
+				try:
+					connnection.close()
+				except Exception as e:
+						print("Error closing connection: ", e)
+						sys.exit(0)
+			self.sockfd_backwardlink.close()
 
 	# Functions to handle user input
 	def do_User(self):
@@ -533,11 +476,25 @@ class Client:
 		msg = "L::\r\n"
 		try:
 			self.send_tcp(msg)
-		except Exception:
+		except Exception: 
 			# if the connection hasn't been established
 			# try establishing it
 			self.connect_to_RoomServer()
 			self.send_tcp(msg)
+
+	def join_and_keep_Alive(self):
+		# global client
+		while True:
+			userIP, userPort = self.getInfo()
+			msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
+			try:
+				self.send_tcp(msg)
+			except Exception:
+				# if the connection hasn't been established
+				# try establishing it
+				self.connect_to_RoomServer()
+				self.send_tcp(msg)
+			sleep(20)
 
 	def do_Join(self):
 		# global client
@@ -553,47 +510,37 @@ class Client:
 		else:
 			self.roomName = roomname
 			self.inRoom = True
-			self.gui.CmdWin.insert(1.0, "\nJoined Room.")
 			keepalive_thd = threading.Thread(target = self.join_and_keep_Alive, daemon=True)
 			keepalive_thd.start()
 
 	def do_Send(self):
 		# self.gui.CmdWin.insert(1.0, "\nPress Send")
 		msg_text = self.gui.userentry.get()
-		if not self.inRoom or not msg_text: return
 		self.gui.userentry.delete(0, END)
-
 		msg_display = "\n[{}] {}".format(self.username, msg_text)
-		print("putting this in message queue", msg_display)
-		self.msg_queue.put(msg_display)
-
-		self.msg_counter += 1
-		msg_id = self.msg_counter
+		self.gui.CmdWin.insert(1.0, msg_display)
+		
 		msg = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
-			self.roomName, self.HID, self.username, msg_id, len(msg_text), msg_text)
-		print("sending this message", msg)
+			self.roomName, self.HID, self.username, 3, len(msg_text), msg_text)
+
 		# try sending message to forwardlink
 		try:
 			self.sockfd_forwardlink.send(msg.encode('ascii'))
-			if self.HID in self.msg_history:
-				self.msg_history[self.HID][msg_id] = 1
-			else:
-				self.msg_history[self.HID] = {msg_id : 1}
 		# set up forward link if broken / not established
 		except Exception as e:
 			print("{} unable to send msg to forwardlinks: {}".format(self.username, e))
 			self.Fowlink = False
+			self.thread_ForwardLink()
 
 		# try sending to all backlinks
 		try:
 			for p in self.Wlist:
-				if p != self.sockfd_forwardlink:
-					p.send(msg.encode('ascii'))
+				# if p != sd:
+				p.send(msg.encode('ascii'))
 		except Exception as e:
 			print("{} unable to send msg to backwardlinks: {}".format(self.username, e))
-			# self.thread_BackwardLink()
-
-	""" call close_connection() and quit """
+			self.thread_BackwardLink()		
+	
 	def do_Quit(self):
 		# global client
 		# client.Exit = True
@@ -601,7 +548,7 @@ class Client:
 		self.close_connection()
 		sys.exit(0)
 
-	""" do udp poke """
+
 	def do_Poke(self):
 		# global client
 		self.gui.CmdWin.insert(1.0, "\nPress Poke")
@@ -612,39 +559,19 @@ class Client:
 			for user in self.members:
 				if not user == self.username:
 					self.gui.CmdWin.insert(1.0, "\n{}".format(user))
-			self.gui.CmdWin.insert(1.0, "\nTo whom do you want to send the poke?")
+			self.gui.CmdWin.insert(1.0, "\n To whom do you want to send the poke?")
 		elif (topoke not in self.members) or topoke == self.username:
 			self.gui.CmdWin.insert(1.0, "\nPoke error.")
 		else:
 			self.poker(topoke)
 			self.gui.userentry.delete(0, END)
 
-	""" close all socket threads and connections """
-	def close_connection(self):
-		# try:
-
-		if self.sockfd_roomserver:
-			self.sockfd_roomserver.close()
-
-		if self.Fowlink:
-			self.sockfd_forwardlink.close()
-
-		if self.sockfd_backwardlink:
-			for connnection in self.Wlist:
-				try:
-					connnection.close()
-				except Exception as e:
-						print("Error closing connection: ", e)
-						sys.exit(0)
-			self.sockfd_backwardlink.close()
-
-	""" create new udp socket for poke everytime do_Poke() """
 	def poker(self, topoke):
 		# global client
 		msg = "K:{}:{}::\r\n".format(self.roomName, self.username)
 		topoke_ip = self.members[topoke]._ip
 		topoke_port = self.members[topoke]._port
-		print("for poking", topoke_ip, topoke_port)
+		print(topoke_ip, topoke_port)
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		sock.sendto(msg.encode("ascii"), (topoke_ip, topoke_port))
 		sock.settimeout(2)
@@ -656,36 +583,17 @@ class Client:
 			self.gui.CmdWin.insert(1.0, "\nDid not receive ACK flag.")
 		sock.close()
 
-	""" creates udp socket and call udp_listener() """
-	def create_udp(self):
-		self.sockud = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		self.sockud.bind(('', self._port))
-		udpthd = threading.Thread(target=self.udp_listener, daemon=True)
-		udpthd.start()
-
-	""" receive pokes from other users """
-	def udp_listener(self):
-		while True:
-			response, addr = self.sockud.recvfrom(1024)
-			response = response.decode("utf-8")
-			print("received at udp", response)
-			if response[0] == 'K':
-				msg = "A::\r\n"
-				self.sockud.sendto(msg.encode("ascii"), (addr[0], addr[1]))
-				msg = "\n{} just poked you".format(response.split(':')[2])
-				# print(msg)
-				self.msg_queue.put(msg)
 
 def main():
 	# global client
 	if len(sys.argv) != 4:
 		print("P2PChat.py <server address> <server port no.> <my port no.>")
 		sys.exit(2)
-
+	
 	win = Tk()
 	win.title("MyP2PChat")
-
-	# client =
+	
+	# client = 
 	Client(int(sys.argv[3]), win)
 
 	win.mainloop()
