@@ -223,6 +223,11 @@ class Client:
 				msg_content += msg_text[i]
 			i += 1
 		return msg_content
+	
+	def find_peer_username(self, peer_ip, peer_port):
+		members_list = list(self.members.items())
+		peer_username =  next((x[1]._name for x in members_list if x[1]._ip == peer_ip and x[1]._port == peer_port), None)
+		return peer_username
 
 	def P2P_listener(self):
 		# open backlink socket
@@ -240,7 +245,7 @@ class Client:
 			# incoming messages or 10 seconds
 			Rready = self.getRready()
 			if not Rready:
-				# print("Idling", self.username)
+				print("Idling", self.username)
 				continue
 			# if has incoming activities
 			for sd in Rready:
@@ -278,6 +283,20 @@ class Client:
 						print("Connection is broken at sd")
 						self.Wlist.remove(sd)
 						self.Rlist.remove(sd)
+						if sd == self.sockfd_forwardlink:
+							self.Fowlink = False
+							fowlink_thd = threading.Thread(target = self.thread_ForwardLink, daemon=True)
+							fowlink_thd.start()
+						else:
+							# get ip and port from sd
+							peer_ip, peer_port = sd.getsockname()
+							# find username of sd
+							peer_username = self.find_peer_username(peer_ip, peer_port)
+							# calculate hash
+							peer_hashval = sdbm_hash(str(peer_username)+str(peer_ip)+str(peer_port))
+							# remove hash from backlist_hash
+							self.backlist_hash.remove(peer_hashval)
+
 					elif rmsg[0] == "T":
 						print("received text message", rmsg)
 						msg_text = rmsg.split(':')
@@ -298,6 +317,7 @@ class Client:
 							continue
 						else:
 							if msg_origin_hid in self.msg_history:
+								print("is this taking time?")
 								if msg_id in self.msg_history[msg_origin_hid]:
 									print("message already received.")
 									continue
@@ -326,6 +346,19 @@ class Client:
 						print("A client connection is broken!!")
 						self.Wlist.remove(sd)
 						self.Rlist.remove(sd)
+						if sd == self.sockfd_forwardlink:
+							self.Fowlink = False
+							fowlink_thd = threading.Thread(target = self.thread_ForwardLink, daemon=True)
+							fowlink_thd.start()			
+						else:
+							# get ip and port from sd
+							peer_ip, peer_port = sd.getsockname()
+							# find username of sd
+							peer_username = self.find_peer_username(peer_ip, peer_port)
+							# calculate hash
+							peer_hashval = sdbm_hash(str(peer_username)+str(peer_ip)+str(peer_port))
+							# remove hash from backlist_hash
+							self.backlist_hash.remove(peer_hashval)
 
 	def connect_Forwardlink(self):
 		# print("entered in connect_Forwardlink")
@@ -386,17 +419,23 @@ class Client:
 
 	def thread_ForwardLink(self):
 		# if not already forwardlinked and not already trying to establish a forwardlink
-		while True:
-			if not self.Fowlink and not self.Fowlink_inprogress:
+		while not self.Fowlink:
+			if not self.Fowlink_inprogress:
 				fowlink_thd = threading.Thread(target=self.connect_Forwardlink, daemon=True)
 				fowlink_thd.start()
 			sleep(5)
 
 	def quick_verify(self, hash_verify):
+
+		print("inside quick verify")
+
+		verified = False
+		''' What if this peer is not in my member list? '''
 		# To verify whether this unknown peer is in the most updated member list
-		for member in self.members:
-			if str(self.members[member]._hashval) == str(hash_verify):
-				return True
+		# for member in self.members:
+		# 	if str(self.members[member]._hashval) == str(hash_verify):
+		# 		return True
+
 		# send join info
 		userIP, userPort = self.getInfo()
 		msg = "J:{}:{}:{}:{}::\r\n".format(self.roomName, self.username, userIP, str(userPort))
@@ -409,16 +448,20 @@ class Client:
 		# recieve member info
 		# TODO: check if recv blocks thread.
 		response = self.sockfd_roomserver.recv(1024).decode("utf-8")
+		print("reached here inside quick verify")
 		if response[0] == "M":
 			values = response.split(':')
 			i = 2
 			while i+2 < len(values):
 				hash_str = sdbm_hash(str(values[i])+str(values[i+1])+str(values[i+2]))
+				# might as well update my own member list
+				self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), hash_str)
 				if str(hash_str) == str(hash_verify):
-					return True
+					verified = True
 				i += 3
 
-		return False
+		print("returned quick verify {}".format(verified))
+		return verified
 
 	def thread_BackwardLink(self):
 		if not self.P2P_listening:
@@ -429,22 +472,24 @@ class Client:
 		i = 2
 		self.members.clear()
 		print("{} recieved new member list".format(self.username))
-		flag = False
+		forwardlink_hash_flag = False
 		while i+2 < len(values):
 			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
 			hash_val = sdbm_hash(hash_str)
 			# print("checking hash string for forward link", hash_val, self.forward_link_hash)
 			if hash_val == self.forward_link_hash:
-				flag = True
+				forwardlink_hash_flag = True
 			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), hash_val)
 			# print(values[i], values[i+1], int(values[i+2]), hash_val)
 			i += 3
-		if self.Fowlink and not flag:
+		
+		if self.Fowlink and not forwardlink_hash_flag:
 			outstr = "\nOld forward link broken. Will try again."
 			self.cmd_queue.put(outstr)
 			self.Fowlink= False
-		elif not self.Fowlink:
-			print("reasong for starting thread; fowlink", self.Fowlink, "flag", flag)
+		
+		if not self.Fowlink:
+			print("reasong for starting thread; fowlink", self.Fowlink, "flag", forwardlink_hash_flag)
 			print("starting forward link thread. this statement should only print once.")
 			fowlink_thd = threading.Thread(target = self.thread_ForwardLink, daemon=True)
 			fowlink_thd.start()
