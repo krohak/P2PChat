@@ -60,8 +60,9 @@ class Member:
 # Set up of Basic UI
 #
 class GUI:
-	def __init__(self, win, _queue, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
-		self.queue = _queue
+	def __init__(self, win, _msgqueue, _cmdqueue, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
+		self.msgqueue = _msgqueue
+		self.cmdqueue = _cmdqueue
 		self.create_frames(win, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit)
 
 	def create_frames(self, win, do_User, do_List, do_Join, do_Send, do_Poke, do_Quit):
@@ -111,11 +112,19 @@ class GUI:
 		self.CmdWin = CmdWin
 
 	def processIncoming(self):
-		while self.queue.qsize():
+		while self.msgqueue.qsize():
 			try:
-				msg = self.queue.get(0)
+				msg = self.msgqueue.get(0)
 				# print(msg)
 				self.MsgWin.insert(1.0, msg)
+			except Queue.Empty:
+				pass
+		
+		while self.cmdqueue.qsize():
+			try:
+				cmd = self.cmdqueue.get(0)
+				# print(msg)
+				self.CmdWin.insert(1.0, cmd)
 			except Queue.Empty:
 				pass
 
@@ -129,6 +138,7 @@ class Client:
 	sockud = None
 	Exit = False
 	msg_queue = Queue.Queue()
+	cmd_queue = Queue.Queue()
 
 	# new variables
 	Rlist = []
@@ -153,7 +163,7 @@ class Client:
 
 		self.open_backlink()
 
-		self.gui = GUI(self.tkroot, self.msg_queue, self.do_User, self.do_List, self.do_Join,
+		self.gui = GUI(self.tkroot, self.msg_queue, self.cmd_queue, self.do_User, self.do_List, self.do_Join,
 		self.do_Send, self.do_Poke, self.do_Quit)
 		self.periodic_msg_display()
 
@@ -191,7 +201,7 @@ class Client:
 			msg = "S:{}::\r\n".format(self.prev_msgid)
 			newfd.send(msg.encode('ascii'))
 			outstr = "\nEstablished backlink with {}".format(values[2])
-			self.msg_queue.put(outstr)
+			self.cmd_queue.put(outstr)
 			# mark node as backward link
 			# print("appending this to backlist_hash", hashval)
 			self.backlist_hash.append(hashval)
@@ -360,7 +370,7 @@ class Client:
 						# print("received response for confirmation of forward link", response)
 						# print("{} established forwardlink with {}".format(self.username, candidate._name))
 						outstr = "\nEstablished forwardlink with {}".format(candidate._name)
-						self.msg_queue.put(outstr)
+						self.cmd_queue.put(outstr)
 						self.Fowlink = True
 						self.Rlist.append(self.sockfd_forwardlink)
 						self.Wlist.append(self.sockfd_forwardlink)
@@ -431,7 +441,7 @@ class Client:
 			i += 3
 		if self.Fowlink and not flag:
 			outstr = "\nOld forward link broken. Will try again."
-			self.msg_queue.put(outstr)
+			self.cmd_queue.put(outstr)
 			self.Fowlink= False
 		elif not self.Fowlink:
 			print("reasong for starting thread; fowlink", self.Fowlink, "flag", flag)
@@ -458,7 +468,7 @@ class Client:
 			# response from list
 			if response[0] == "G":
 				print("putting this on queue 2", response)
-				self.msg_queue.put("\n{}".format(response))
+				self.cmd_queue.put("\n{}".format(response))
 
 			# response from join
 			elif response[0] == "M":
@@ -565,7 +575,8 @@ class Client:
 
 		msg_display = "\n[{}] {}".format(self.username, msg_text)
 		print("putting this in message queue", msg_display)
-		self.msg_queue.put(msg_display)
+		# self.msg_queue.put(msg_display)
+		self.gui.MsgWin.insert(1.0, msg_display)
 
 		self.msg_counter += 1
 		msg_id = self.msg_counter
