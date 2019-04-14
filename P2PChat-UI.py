@@ -7,11 +7,6 @@
 # Version: 23
 
 
-"""
-All of the sockets in the readable list have incoming data buffered and available to be read.
-All of the sockets in the writable list have free space in their buffer and can be written to.
-"""
-
 from tkinter import *
 import sys
 import socket
@@ -37,14 +32,6 @@ def sdbm_hash(instr):
 		hash = int(ord(c)) + (hash << 6) + (hash << 16) - hash
 	return hash & 0xffffffffffffffff
 
-
-#
-# Global variables
-#
-# client = None
-
-# TODO: get member class ready, add ip and host to it along with username.
-# parse the response string and add to member list
 
 
 class Member:
@@ -215,11 +202,7 @@ class Client:
 	def remove_backlink(self, sd):
 		# get ip and port from sd
 		peer_ip, peer_port = sd.getpeername()
-		# find username of sd
-		# peer_username = self.find_peer_username(peer_ip, peer_port)
-		# calculate hash
 		peer_hashval = self.backlist_dict[(peer_ip, peer_port)]
-		# sdbm_hash(str(peer_username)+str(peer_ip)+str(peer_port))
 		# remove hash from backlist_hash
 		if peer_hashval in self.backlist_hash:
 			self.backlist_hash.remove(peer_hashval)
@@ -237,11 +220,6 @@ class Client:
 			i += 1
 		return msg_content
 
-	""" goes through member list to get username """
-	# def find_peer_username(self, peer_ip, peer_port):
-	# 	members_list = list(self.members.items())
-	# 	peer_username =  next((x[1]._name for x in members_list if x[1]._ip == peer_ip and x[1]._port == peer_port), None)
-	# 	return peer_username
 
 	""" listens for all sockets """
 	def P2P_listener(self):
@@ -445,19 +423,11 @@ class Client:
 		i = 2
 		self.members.clear()
 		print("{} recieved new member list".format(self.username))
-		# forwardlink_hash_flag = False
 		while i+2 < len(values):
 			hash_str = str(values[i])+str(values[i+1])+str(values[i+2])
 			hash_val = sdbm_hash(hash_str)
-			# if hash_val == self.forward_link_hash:
-			# 	forwardlink_hash_flag = True
 			self.members[values[i]] = Member(values[i], values[i+1], int(values[i+2]), hash_val)
 			i += 3
-
-		# if self.Fowlink and not forwardlink_hash_flag:
-		# 	outstr = "\nOld forward link broken. Will try again."
-		# 	self.cmd_queue.put(outstr)
-		# 	self.Fowlink= False
 
 		if not self.Fowlink:
 			# print("starting forward link thread. this statement should only print once.")
